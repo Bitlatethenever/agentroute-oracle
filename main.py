@@ -18,6 +18,16 @@ import base64
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# Configuration
+# ============================================================================
+
+# Alby Lightning Address for receiving payments
+ALBY_LIGHTNING_ADDRESS = os.getenv(
+    "ALBY_LIGHTNING_ADDRESS",
+    "jocundpresence451531@getalby.com"
+)
+
 app = FastAPI(
     title="AgentRoute Oracle",
     description="L402-protected Lightning Network routing optimization service for AI agents",
@@ -240,7 +250,8 @@ async def find_route(
                 "pricing": {
                     "base_price_sats": 10,
                     "max_price_sats": 30
-                }
+                },
+                "payment_address": ALBY_LIGHTNING_ADDRESS
             },
             headers={
                 "WWW-Authenticate": 'L402 macaroon="...", invoice="..."'
