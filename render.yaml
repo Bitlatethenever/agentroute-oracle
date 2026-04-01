@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: agentroute-oracle
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SERVICE_NAME
+        value: AgentRoute Oracle
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: BASE_PRICE_SATS
+        value: "10"
+      - key: MAX_PRICE_SATS
+        value: "30"
+      - key: DYNAMIC_PRICING_ENABLED
+        value: "true"
+      - key: MACAROON_KEY
+        value: prod-key-${RENDER_GIT_COMMIT}
+      - key: PREIMAGE_KEY
+        value: prod-preimage-${RENDER_GIT_COMMIT}
