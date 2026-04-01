@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # AgentRoute Oracle API
+  agentroute-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentroute-oracle
+    ports:
+      - "8000:8000"
+    environment:
+      - MACAROON_KEY=dev-key-12345
+      - PREIMAGE_KEY=dev-preimage-12345
+      - LND_HOST=lnd
+      - LND_PORT=10009
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./main.py:/app/main.py
+    depends_on:
+      - lnd
+    networks:
+      - agentroute
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Aperture L402 Reverse Proxy
+  aperture:
+    image: lightninglabs/aperture:latest
+    container_name: aperture-proxy
+    ports:
+      - "8081:8081"
+    environment:
+      - APERTURE_LISTEN=0.0.0.0:8081
+      - APERTURE_BACKEND=http://agentroute-api:8000
+      - APERTURE_LND_HOST=lnd
+      - APERTURE_LND_PORT=10009
+      - APERTURE_MACAROON_PATH=/lnd/data/chain/bitcoin/mainnet/admin.macaroon
+      - APERTURE_TLS_CERT_PATH=/lnd/tls.cert
+    volumes:
+      - lnd_data:/lnd
+    depends_on:
+      - agentroute-api
+      - lnd
+    networks:
+      - agentroute
+    restart: unless-stopped
+
+  # LND Node (for testing)
+  lnd:
+    image: lightninglabs/lnd:latest
+    container_name: agentroute-lnd
+    ports:
+      - "10009:10009"
+      - "9735:9735"
+    environment:
+      - LND_CHAIN=bitcoin
+      - LND_NETWORK=mainnet
+      - LND_DEBUGLEVEL=info
+    volumes:
+      - lnd_data:/root/.lnd
+    networks:
+      - agentroute
+    restart: unless-stopped
+    command: >
+      lnd
+      --bitcoin.mainnet
+      --bitcoin.node=neutrino
+      --neutrino.connect=btcd-mainnet.lightning.computer
+      --listen=0.0.0.0:9735
+      --rpclisten=0.0.0.0:10009
+      --tlscertpath=/root/.lnd/tls.cert
+      --tlskeypath=/root/.lnd/tls.key
+
+networks:
+  agentroute:
+    driver: bridge
+
+volumes:
+  lnd_data:
+    driver: local
