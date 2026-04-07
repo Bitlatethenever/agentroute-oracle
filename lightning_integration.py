@@ -1,16 +1,17 @@
 """
 Lightning Network Integration Module
 Connects to LND node via REST API and fetches real network graph data
+Uses requests library for compatibility
 """
 
 import os
 import json
 import logging
-import httpx
+import requests
 import ssl
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import asyncio
+from urllib3.util.ssl_ import create_urllib3_context
 
 logger = logging.getLogger(__name__)
 
@@ -37,27 +38,7 @@ class LightningNodeConnector:
         self.cache_timestamp = None
         self.cache_ttl_seconds = 300  # 5 minute cache
         
-        # HTTP client with SSL verification disabled for self-signed certs
-        self.client = None
-        self._init_client()
-    
-    def _init_client(self):
-        """Initialize HTTP client with proper SSL handling"""
-        try:
-            # Create SSL context that ignores certificate verification
-            # This is necessary for Voltage's self-signed certificates
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
-            self.client = httpx.Client(
-                verify=ssl_context,
-                timeout=30.0
-            )
-            logger.info(f"HTTP client initialized for {self.rest_url}")
-        except Exception as e:
-            logger.error(f"Failed to initialize HTTP client: {e}")
-            self.client = None
+        logger.info(f"Lightning connector initialized for {self.rest_url}")
     
     def _get_headers(self) -> Dict[str, str]:
         """Get headers with macaroon authentication"""
@@ -70,18 +51,20 @@ class LightningNodeConnector:
     async def get_node_info(self) -> Optional[Dict]:
         """Get information about the LND node"""
         try:
-            if not self.client:
-                self._init_client()
-            
             url = f"{self.rest_url}/v1/getinfo"
-            response = self.client.get(url, headers=self._get_headers())
+            response = requests.get(
+                url, 
+                headers=self._get_headers(),
+                verify=False,
+                timeout=10
+            )
             
             if response.status_code == 200:
                 node_info = response.json()
-                logger.info(f"Connected to LND node: {node_info.get('identity_pubkey', 'unknown')}")
+                logger.info(f"Connected to LND node: {node_info.get('identity_pubkey', 'unknown')[:20]}...")
                 return node_info
             else:
-                logger.error(f"Failed to get node info: {response.status_code} - {response.text}")
+                logger.error(f"Failed to get node info: {response.status_code}")
                 return None
         except Exception as e:
             logger.error(f"Error getting node info: {e}")
@@ -100,12 +83,14 @@ class LightningNodeConnector:
                     logger.info(f"Using cached network graph (age: {age:.0f}s)")
                     return self.network_graph_cache
             
-            if not self.client:
-                self._init_client()
-            
             # Fetch network graph
             url = f"{self.rest_url}/v1/graph"
-            response = self.client.get(url, headers=self._get_headers())
+            response = requests.get(
+                url,
+                headers=self._get_headers(),
+                verify=False,
+                timeout=30
+            )
             
             if response.status_code == 200:
                 graph_data = response.json()
@@ -277,12 +262,6 @@ class LightningNodeConnector:
         except Exception as e:
             logger.error(f"Error estimating fee: {e}")
             return 1, amount_sats + 1
-    
-    def close(self):
-        """Close the HTTP client"""
-        if self.client:
-            self.client.close()
-            logger.info("HTTP client closed")
 
 
 # Global connector instance
