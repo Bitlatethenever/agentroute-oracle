@@ -31,9 +31,9 @@ class LightningNodeConnector:
     
     def __init__(self):
         # LND Node Configuration
-        self.lnd_host = os.getenv("LND_HOST", "agentroute-oracle.m.voltageapp.io")
-        self.lnd_rest_port = os.getenv("LND_REST_PORT", "8080")
-        self.admin_macaroon_hex = os.getenv("LND_ADMIN_MACAROON_HEX", "")
+        self.lnd_host = os.getenv("LND_HOST", "agentroute-oracle.m.voltageapp.io").strip()
+        self.lnd_rest_port = os.getenv("LND_REST_PORT", "8080").strip()
+        self.admin_macaroon_hex = os.getenv("LND_ADMIN_MACAROON_HEX", "").strip()
         
         # REST API base URL
         self.rest_url = f"https://{self.lnd_host}:{self.lnd_rest_port}"
