@@ -1,14 +1,14 @@
 """
 AgentRoute Oracle - Lightning Network Routing Optimization Service
 Accepts L402 payments from AI agents, provides optimal routing data
-NOW WITH REAL LIGHTNING NETWORK DATA FROM LND NODE
+NOW WITH REAL LIGHTNING NETWORK DATA FROM LND NODE + MONITORING
 """
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import JSONResponse
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 import os
 import hashlib
@@ -17,10 +17,116 @@ import base64
 import asyncio
 import requests
 import ssl
+import time
+from collections import defaultdict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Monitoring & Metrics System
+# ============================================================================
+
+class MetricsCollector:
+    """Collects and tracks API usage metrics"""
+    
+    def __init__(self):
+        self.start_time = datetime.utcnow()
+        self.total_requests = 0
+        self.total_payments = 0
+        self.total_sats_earned = 0
+        self.failed_requests = 0
+        self.successful_routes = 0
+        self.request_times = []  # Track response times
+        self.requests_by_endpoint = defaultdict(int)
+        self.errors_by_type = defaultdict(int)
+        self.lnd_connection_attempts = 0
+        self.lnd_connection_failures = 0
+        self.lnd_last_connected = None
+        self.lnd_last_error = None
+        self.hourly_requests = defaultdict(int)  # Track requests per hour
+        self.hourly_revenue = defaultdict(float)  # Track revenue per hour
+    
+    def record_request(self, endpoint: str, response_time_ms: float, success: bool = True):
+        """Record an API request"""
+        self.total_requests += 1
+        self.requests_by_endpoint[endpoint] += 1
+        self.request_times.append(response_time_ms)
+        
+        # Keep only last 1000 request times for memory efficiency
+        if len(self.request_times) > 1000:
+            self.request_times = self.request_times[-1000:]
+        
+        # Track hourly metrics
+        hour_key = datetime.utcnow().strftime("%Y-%m-%d %H:00")
+        self.hourly_requests[hour_key] += 1
+        
+        if not success:
+            self.failed_requests += 1
+    
+    def record_payment(self, amount_sats: int):
+        """Record a successful payment"""
+        self.total_payments += 1
+        self.total_sats_earned += amount_sats
+        
+        # Track hourly revenue
+        hour_key = datetime.utcnow().strftime("%Y-%m-%d %H:00")
+        self.hourly_revenue[hour_key] += amount_sats
+    
+    def record_route_calculation(self, success: bool = True):
+        """Record a route calculation"""
+        if success:
+            self.successful_routes += 1
+    
+    def record_error(self, error_type: str):
+        """Record an error"""
+        self.errors_by_type[error_type] += 1
+    
+    def record_lnd_connection(self, success: bool, error_msg: str = None):
+        """Record LND connection attempt"""
+        self.lnd_connection_attempts += 1
+        if success:
+            self.lnd_last_connected = datetime.utcnow()
+        else:
+            self.lnd_connection_failures += 1
+            self.lnd_last_error = error_msg
+    
+    def get_stats(self) -> Dict:
+        """Get current metrics"""
+        uptime = (datetime.utcnow() - self.start_time).total_seconds() / 3600  # hours
+        avg_response_time = sum(self.request_times) / len(self.request_times) if self.request_times else 0
+        
+        return {
+            "uptime_hours": round(uptime, 2),
+            "total_requests": self.total_requests,
+            "total_payments": self.total_payments,
+            "total_sats_earned": self.total_sats_earned,
+            "failed_requests": self.failed_requests,
+            "successful_routes": self.successful_routes,
+            "success_rate": round((self.successful_routes / max(1, self.total_requests)) * 100, 2),
+            "average_response_time_ms": round(avg_response_time, 2),
+            "requests_by_endpoint": dict(self.requests_by_endpoint),
+            "errors_by_type": dict(self.errors_by_type),
+            "lnd_connection_status": {
+                "attempts": self.lnd_connection_attempts,
+                "failures": self.lnd_connection_failures,
+                "last_connected": self.lnd_last_connected.isoformat() if self.lnd_last_connected else None,
+                "last_error": self.lnd_last_error,
+                "connection_reliability": round(
+                    ((self.lnd_connection_attempts - self.lnd_connection_failures) / max(1, self.lnd_connection_attempts)) * 100,
+                    2
+                )
+            },
+            "hourly_metrics": {
+                "requests": dict(self.hourly_requests),
+                "revenue_sats": dict(self.hourly_revenue)
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+# Global metrics collector
+metrics = MetricsCollector()
 
 # ============================================================================
 # Lightning Network Integration (Embedded)
@@ -66,12 +172,15 @@ class LightningNodeConnector:
             
             if response.status_code == 200:
                 node_info = response.json()
+                metrics.record_lnd_connection(True)
                 logger.info(f"Connected to LND node: {node_info.get('identity_pubkey', 'unknown')[:20]}...")
                 return node_info
             else:
+                metrics.record_lnd_connection(False, f"HTTP {response.status_code}")
                 logger.error(f"Failed to get node info: {response.status_code}")
                 return None
         except Exception as e:
+            metrics.record_lnd_connection(False, str(e))
             logger.error(f"Error getting node info: {e}")
             return None
     
@@ -344,6 +453,7 @@ class RoutingOracle:
             routes.sort(key=lambda r: r["total_cost"])
             
             if not routes:
+                metrics.record_error("no_route_found")
                 return {
                     "error": "No route found",
                     "amount_sats": amount_sats,
@@ -356,6 +466,7 @@ class RoutingOracle:
                     }
                 }
             
+            metrics.record_route_calculation(True)
             return {
                 "optimal_route": routes[0],
                 "alternative_routes": routes[1:3] if len(routes) > 1 else [],
@@ -368,6 +479,7 @@ class RoutingOracle:
             }
         except Exception as e:
             logger.error(f"Error finding optimal route: {e}")
+            metrics.record_error(type(e).__name__)
             return {
                 "error": "Route calculation failed",
                 "reason": str(e)
@@ -414,6 +526,7 @@ async def root():
             "capabilities": "/capabilities",
             "route": "/route (POST, L402 protected)",
             "stats": "/stats",
+            "monitor": "/monitor (detailed metrics)",
             "openapi": "/openapi.json"
         },
         "documentation": "https://docs.agentroute.oracle",
@@ -424,17 +537,22 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
+    start_time = time.time()
+    result = {
         "status": "healthy",
         "service": "AgentRoute Oracle",
         "data_source": "Real Lightning Network",
         "timestamp": datetime.utcnow().isoformat()
     }
+    response_time = (time.time() - start_time) * 1000
+    metrics.record_request("/health", response_time, True)
+    return result
 
 @app.get("/capabilities")
 async def capabilities():
     """Machine-readable capabilities for agent discovery"""
-    return {
+    start_time = time.time()
+    result = {
         "service_name": "AgentRoute Oracle",
         "description": "Lightning Network routing optimization service for AI agents",
         "version": "1.0.0",
@@ -463,11 +581,15 @@ async def capabilities():
             }
         ]
     }
+    response_time = (time.time() - start_time) * 1000
+    metrics.record_request("/capabilities", response_time, True)
+    return result
 
 @app.get("/stats")
 async def stats():
     """Service statistics"""
-    return {
+    start_time = time.time()
+    result = {
         "service": "AgentRoute Oracle",
         "uptime_hours": 1,
         "total_queries": 0,
@@ -476,6 +598,18 @@ async def stats():
         "network_health": "healthy",
         "last_updated": datetime.utcnow().isoformat()
     }
+    response_time = (time.time() - start_time) * 1000
+    metrics.record_request("/stats", response_time, True)
+    return result
+
+@app.get("/monitor")
+async def monitor():
+    """Real-time monitoring dashboard endpoint"""
+    start_time = time.time()
+    result = metrics.get_stats()
+    response_time = (time.time() - start_time) * 1000
+    metrics.record_request("/monitor", response_time, True)
+    return result
 
 @app.post("/route")
 async def find_route(
@@ -485,10 +619,14 @@ async def find_route(
     authorization: Optional[str] = Header(None)
 ):
     """Find optimal Lightning route (L402 protected)"""
+    start_time = time.time()
     
     # Verify L402 payment
     payment_result = l402_handler.verify_payment(authorization or "")
     if not payment_result["valid"]:
+        response_time = (time.time() - start_time) * 1000
+        metrics.record_request("/route", response_time, False)
+        metrics.record_error("payment_required")
         return JSONResponse(
             status_code=402,
             content={
@@ -498,8 +636,14 @@ async def find_route(
             }
         )
     
+    # Record payment
+    metrics.record_payment(15)  # 15 sats per query
+    
     # Find route
     route = await routing_oracle.find_optimal_route(amount_sats, destination_pubkey, max_fee_rate)
+    
+    response_time = (time.time() - start_time) * 1000
+    metrics.record_request("/route", response_time, "error" not in route)
     
     return {
         "request": {
