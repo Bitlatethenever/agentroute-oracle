@@ -24,3 +24,20 @@ services:
         value: prod-key-${RENDER_GIT_COMMIT}
       - key: PREIMAGE_KEY
         value: prod-preimage-${RENDER_GIT_COMMIT}
+      - key: MONITOR_INTERVAL_SECONDS
+        value: "300"
+
+workers:
+  - type: background_worker
+    name: agentroute-monitor
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python monitor_and_notify.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: MONITOR_INTERVAL_SECONDS
+        value: "300"
+      - key: LOG_LEVEL
+        value: INFO
